@@ -31,10 +31,13 @@ summary(data)
 ```
 
 ```{r}
-# 生存種子数の確認
+# FG数の確認
 ggplot(data = data) +
     geom_point(aes(x=MP, y=FG, colour=pos))
 
+# FGごとのプレーヤー数
+ggplot(data = data) +
+    geom_histogram(aes(x=FG, fill=pos))
 ```
 
 
@@ -210,4 +213,70 @@ lines(data$weight_in_kg, qgamma(0.5, shape, rate), col = "#808080", lwd = 2)
 
 
 ```
+
+# 一般化線形混合モデルで個体差を加味する(glmmmlパッケージ)
+
+```{r, include = FALSE}
+library(glmmML)
+```
+
+
+
+```{r}
+data <- data %>% 
+    mutate(id = row_number())
+
+# ロジスティック回帰
+fit_glmmml <- glmmML(cbind(FG, FGA - FG) ~ MP + pos, data = data, family = binomial, cluster = id, method = 'ghq')
+
+summary(fit_glmmml)
+```
+
+# 一般化線形混合モデルで個体差を加味する(lme4パッケージ)
+
+```{r, include = FALSE}
+library(lme4)
+```
+
+```{r}
+data <- data %>% 
+    mutate(id = row_number())
+
+# ロジスティック回帰
+fit_glmer <- glmer(cbind(FG, FGA - FG) ~ MP + pos + (1|id), data = data, family = binomial)
+    
+summary(fit_glmer)
+```
+
+# 疑問点
+
+## glmmml とlme4 のAICが違う
+
+glmmmlのみ、他のものとAICの計算が違う？
+lme4は、glmと同じ計算方法を使っている？
+
+いかに書いてあるやつ。
+
+[生態学データ解析 - glmmML 紹介](https://kuboweb.github.io/-kubo/ce/IntroductionGlmmML.html#toc2)
+[過分散データ：GLM負の二項分布、GLMMによる推定をAICでモデル選択することは可能か？](http://nhkuma.blogspot.com/2014/02/glmglmmaic.html)
+
+lme4のAICの計算方法が当時と変わっているっぽい。
+本来、データの特性に合わせてモデル選択するので、glmとglmmmlは比較する必要はない?
+glmとglmmmlを使った場合は、比較できないか、やり方がかなりめんどくさい(glmmmlはdeviance/loglikを返してくれないかつ、返してくれるdevianceが計算方法多分違う)
+lme4の方を使っといた方が、基本は無難な気がする。
+
+
+## 二項分布を使ったglmで、目的変数を y ~ と指定する場合と、cbind(y, N-y) ~ で指定する場合の違い?
+
+確かめてないが、以下の違いだと憶測している
+y ~ → yが2値の場合
+cbind → yが成功回数の場合
+
+## GLMMパッケージとlme4パッケージとの比較
+
+[GLMMをRで実行する方法 | Sunny side up!](https://norimune.net/2365)
+
+- アルゴリズムが異なることによる推定精度の違い
+- 指定できる変量効果の個数違い
+
 
