@@ -1,0 +1,188 @@
+---
+title: "R Notebook"
+output: 
+    html_document:
+        toc: true
+        number_section: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r install_package, include=FALSE}
+# パッケージの読み込み
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+```
+
+# やりたいこと
+
+得点数をモデリングする
+- 得点数 = カウントデータ
+- ポアソン分布でモデリングする方針
+  - 非負のカウントデータのため
+
+```{r}
+df_stats_1992 <- read_csv('../data/nba/processed/player_stats_1992.csv')
+
+data <- df_stats_1992$PTS
+
+# 観測されたデータ数
+length(data) 
+
+# データの要約
+summary(data)
+
+# ヒストグラム
+hist(data)
+
+# 標本統計量
+var(data) # 標本分散
+sd(data) # 標本標準偏差
+sqrt(var(data))
+mean(data) # 標本平均
+```
+カウントデータかつ、平均と標準偏差が近いので、ポアソン分布を見てみる。
+どう見てもポアソン分布ではなさそう(平均 = 分散が成り立っていない)だが、一旦は確認のためにポアソン分布を見てみる。
+
+```{r}
+y <- seq(0, 2500, 10)
+prob <- dpois(y, lambda = 622.3)
+
+plot(y, prob, type = 'b', lty = 2)
+```
+
+やっぱりどう見ても違っている。
+
+```{r}
+# 対数尤度
+
+logL <- function(m) {
+    dpois(data, m, log = TRUE) %>% 
+    sum()
+    }
+
+
+lambda <- seq(0, 2500, 10)
+plot(lambda, sapply(lambda, logL), type='l')
+```
+
+# 説明できる変数について調べる
+
+今回の得点数は、シーズンの総得点数。
+- 明らかに、プレイ時間(MS)が影響すると考えられる。(出場時間が長いほど、得点も大きくなる)
+- ポジション(ガードの方が戦術的に点を取りやすい?)
+
+
+
+```{r}
+data <- df_stats_1992
+
+# 文字列を因子型に変換
+data <- data %>% 
+    mutate(pos = factor(pos))
+
+data %>% head()
+
+# posを見てみる
+summary(data)
+
+# プロットしてみる
+plot(data$MP, data$PTS)
+plot(data$pos, data$PTS)
+```
+
+複合ポジションが書かれている人はめちゃ少ないので、問題ありそうなので、書き換える。
+wikipediaから、ポジションを一つに決める
+
+```{r}
+data <- data %>% 
+    mutate(
+        pos = as.character(pos),
+        pos = case_when(
+            player == 'Sean Higgins' ~'SF',
+            player == 'Rex Chapman' ~ 'SG',
+            player == 'John Morton' ~ 'PG',
+            player == 'Kennard Winchester' ~ 'SG',
+            TRUE ~ pos
+            ),
+        pos = factor(pos)
+        )
+
+# プロットしてみる
+plot(data$pos, data$PTS)
+
+# これを保存しておく
+data %>% write_csv('../data/nba/processed/player_stats_1992_fixed_pos.csv')
+```
+
+
+```{r}
+# posのないモデルをあてはめてみる
+
+fit1 <- glm(PTS ~ MP, data = data, family = poisson)
+           
+summary(fit1)
+
+logLik(fit1)
+```
+
+```{r}
+# posのないモデルをあてはめてみる
+
+fit2 <- glm(PTS ~ MP + pos, data = data, family = poisson)
+           
+summary(fit2)
+
+logLik(fit2)
+
+
+# このモデルでMPの影響を除いたときの分布がポアソン分布になっているかを確認する
+hist(residuals(fit2))
+
+```
+
+# POS入りのモデルと、なしのモデルを比較する検定
+
+帰無仮説：pos入りじゃないモデル
+対立仮説：pos入りのモデル
+
+```{r}
+# 検定(帰無仮説 - 対立仮説)
+fit1$deviance - fit2$deviance
+```
+```{r}
+data$y.rnd <- rpois(nrow(data), lambda = mean(data$PTS))
+
+fit1_rnd <- glm(y.rnd ~ MP, data = data, family = poisson)
+fit2_rnd <- glm(y.rnd ~ MP + pos, data = data, family = poisson)
+
+fit1_rnd$deviance - fit2_rnd$deviance
+```
+
+```{r}
+get.dd <- function(data){
+    n.sample <- nrow(data)
+    y.mean <- mean(data$PTS)
+    data$y.rnd <- rpois(n.sample, lambda = y.mean)
+    fit1_rnd <- glm(y.rnd ~ MP, data = data, family = poisson)
+    fit2_rnd <- glm(y.rnd ~ MP + pos, data = data, family = poisson)
+    fit1_rnd$deviance - fit2_rnd$deviance
+}
+
+pb <- function(d, n.bootstrap){
+    replicate(n.bootstrap, get.dd(d))
+}
+
+dd12 <- pb(data, n.bootstrap = 1000)
+
+summary(dd12)
+hist(dd12, 100)
+```
+
+```{r}
+anova(fit1, fit2, test = 'Chisq')
+```

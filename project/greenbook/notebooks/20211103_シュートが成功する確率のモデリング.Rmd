@@ -1,0 +1,213 @@
+---
+title: "シュートが成功する確率のモデリング"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r install_package, include=FALSE}
+# パッケージの読み込み
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+```
+
+# やりたいこと
+
+得点の確率をモデリングする
+- 選手ごとに、N回シュートをうったら、得点した回数がy回、得点できなかった回数がN-y回
+
+```{r}
+data <- read_csv('../data/nba/processed/player_stats_1992_fixed_pos.csv')
+
+# 観測されたデータ数
+length(data) 
+
+# データの要約
+summary(data)
+```
+
+```{r}
+# 生存種子数の確認
+ggplot(data = data) +
+    geom_point(aes(x=MP, y=FG, colour=pos))
+
+```
+
+
+```{r}
+# ロジスティック回帰を見てみる
+logistic <- function(z){
+    1 / (1 + exp(-z))
+}
+
+z <- seq(-6, 6, 0.1)
+plot(z, logistic(z), type = 'l')
+```
+
+```{r}
+# ロジスティック回帰
+fit1 <- glm(cbind(FG, FGA - FG) ~ 1, data = data, family = binomial)
+fit2 <- glm(cbind(FG, FGA - FG) ~ MP, data = data, family = binomial)
+fit3 <- glm(cbind(FG, FGA - FG) ~ MP + pos, data = data, family = binomial)
+
+summary(fit1)
+summary(fit2)
+summary(fit3)
+
+# オッズ比の確認(fit3のモデルの場合)
+
+## SGの場合
+exp(5.816e-01) * exp(-6.570e-02)
+
+## 他の条件が同じとき、SFに比べてSGだとオッズ比がどれだけ変わるか
+exp(-1 * -3.515e-02) * exp(-6.570e-02)
+
+## 他の条件が同じとき、Cに比べてSGだとオッズ比がどれだけ変わるか
+exp(-6.570e-02)
+```
+
+予測を確認する
+
+```{r}
+# ロジスティック回帰(交互作用項を追加したモデル)
+fit4 <- glm(cbind(FGA, FGA - FG) ~ MP * pos, data = data, family = binomial)
+
+summary(fit4)
+```
+
+AICは向上しているものの、これは偽の交互作用で辻褄を合わせている可能性がある。
+
+```{r}
+plot_mp_pos <- function(fit, main = NA) {
+	plot(data$MP, data$FG, type = "n", main = NA, xlab = "", ylab = "")
+    
+    xx <- seq(min(data$MP), max(data$MP), 1)
+
+	# Cの予測可視化
+	ff <- factor("C", levels = c('C', 'PF', 'PG', 'SF', 'SG'))
+	N <- as.integer(mean(data$FGA))
+	q <- predict(fit, newdata = data.frame(MP = xx, pos = ff), type = "response")
+	lines(xx, q * N, lwd = 3)
+    	
+    # PFの予測可視化
+	ff <- factor("PF", levels = c('C', 'PF', 'PG', 'SF', 'SG'))
+	N <- mean(data$FGA)
+	q <- predict(fit, newdata = data.frame(MP = xx, pos = ff), type = "response")
+	lines(xx, q * N, col = "gray", lwd = 3)
+	
+    # SFの予測可視化
+	ff <- factor("SF", levels = c('C', 'PF', 'PG', 'SF', 'SG'))
+	N <- mean(data$FGA)
+	q <- predict(fit, newdata = data.frame(MP = xx, pos = ff), type = "response")
+	lines(xx, q * N, col = "blue", lwd = 3)
+	
+	# SGの予測可視化
+	ff <- factor("SG", levels = c('C', 'PF', 'PG', 'SF', 'SG'))
+	N <- mean(data$FGA)
+	q <- predict(fit, newdata = data.frame(MP = xx, pos = ff), type = "response")
+	lines(xx, q * N, col = "red", lwd = 3)
+	
+	# PG
+	ff <- factor("PG", levels = c('C', 'PF', 'PG', 'SF', 'SG'))
+	N <- mean(data$FGA)
+	q <- predict(fit, newdata = data.frame(MP = xx, pos = ff), type = "response")
+	lines(xx, q * N, col = "green", lwd = 3)
+}
+plot_mp_pos(fit3)
+plot_mp_pos(fit4)
+```
+
+これは、`r as.integer(mean(data$FGA))`回シュートをうったと仮定したときの、成功本数を表している。
+
+
+# シュート成功率を調べる
+
+目的：選手iにおける、FG%が、ポジションの違いにどう影響されているのかを知りたい
+
+- 選手ごとに、シュートアテンプト数が異なっている
+- アテンプトがゼロなら、それは欲しい情報を持っていないので、データを除外するのが良さそう。https://stats.stackexchange.com/questions/136037/modelling-count-data-where-offset-variable-is-0-for-some-observations
+    - 変数変換をする前に、データの意味を考えないといけない。
+
+```{r}
+data_has_shooted <- data %>% 
+    filter(FGA > 0)
+
+fit5 <- glm(FG ~ pos, offset = log(FGA), family = poisson, data = data_has_shooted)
+summary(fit5)
+```
+
+FG数平均は、FGAに比例するといった過程を反映させつつ、ポジションの効果を推定できる。
+
+# 選手の身長と体重の関係
+
+```{r}
+data_physical <- data %>% 
+    filter(!is.na(weight_in_kg) & !is.na(height_in_cm))
+
+ggplot(data_physical) +
+    geom_point(aes(x=weight_in_kg, y=height_in_cm))
+
+fit6 <- glm(height_in_cm ~ weight_in_kg, family = Gamma(link = 'log'), data = data)
+
+summary(fit6)
+```
+
+```{r}
+
+# 可視化
+sum.fit <- summary(fit6)
+vc <- sum.fit$coefficients[,"Estimate"]
+
+names(vc) <- c("b1", "b2")
+phi <- sum.fit$dispersion # dispersion parameter
+sink("glm.txt")
+print(sum.fit)
+sink()
+
+width  <- 4 # inch
+height <- 3 # inch
+
+get.y.mean <- function(b1, b2, x) exp(b1 + b2 * log(x))
+plot.d <- function(tline = TRUE)
+{
+	plot(data$weight_in_kg, data$height_in_cm, xlab = "", ylab = "") 
+	if (tline) {
+		lines(data$weight_in_kg, get.y.mean(vc[["b1"]], vc[["b2"]], data$weight_in_kg), lty = 2, lwd = 2)
+	}
+}
+
+# 帯の可視化準備
+m <- get.y.mean(vc["b1"], vc["b2"], data$weight_in_kg)
+rate <- 1 / (phi * m)
+shape <- 1 / phi
+plot.pi <- function(q) polygon(
+	c(data$weight_in_kg, rev(data$weight_in_kg)),
+	c(qgamma(q, shape, rate), rev(qgamma(1 - q, shape, rate))),
+	border = NA,
+	col = "#00000020"
+)
+
+# 可視化1
+plot.d() +
+
+# 可視化2
+plot.d(FALSE) +
+lines(data$weight_in_kg, get.y.mean(-1.3, 0.5, data$weight_in_kg), lty = 1, lwd = 2, col = "#808080") +
+lines(data$weight_in_kg, get.y.mean(-0.5, 2, data$weight_in_kg), lty = 1, lwd = 2, col = "#808080") +
+text(0.4, 0.4, "?", cex = 10, col = "#808080") +
+
+# 可視化3
+plot.d() +
+lines(data$weight_in_kg, predict(fit6, newdata = data.frame(weight_in_kg = data$weight_in_kg), type = "response"), lwd = 2) +
+plot.pi(q = 0.05) +
+plot.pi(q = 0.25) +
+# median
+lines(data$weight_in_kg, qgamma(0.5, shape, rate), col = "#808080", lwd = 2)
+
+
+```
+

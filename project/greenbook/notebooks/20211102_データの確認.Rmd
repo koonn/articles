@@ -1,0 +1,97 @@
+---
+title: "NBAデータの確認"
+output: 
+    html_document:
+        toc: true
+        number_section: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r install_package, include=FALSE}
+# パッケージの読み込み
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+```
+
+
+# はじめに
+
+分析に使用するNBAデータを概観する。
+
+## データの読み込み
+
+```{r interim_data, include=FALSE}
+# データの読み込み
+df_player1 <- read_csv('../data/nba/raw/player_data.csv') 
+df_player2 <- read_csv('../data/nba/raw/Players.csv')
+df_stats <- read_csv('../data/nba/raw/Seasons_Stats.csv')
+
+# データの整形
+df_player1 <- df_player1 %>%
+    set_colnames(c('player', 'year_start', 'year_end', 'pos', 'height', 'weight', 'birth_date', 'collage')) %>% 
+    select(-pos, -collage)
+
+df_player2 <- df_player2 %>% 
+    select(-`...1`) %>% 
+    set_colnames(c('player', 'height_in_cm', 'weight_in_kg', 'collage', 'born', 'birth_city', 'birth_state'))
+
+df_stats <- df_stats %>%
+    select(-`...1`) %>% 
+    rename(c(year=Year, player=Player, pos=Pos, age=Age, team=Tm))
+
+
+# プレイヤーデータをまとめる
+df_player <- df_player1 %>% 
+    left_join(df_player2, by='player')
+df_player %>% head()
+
+# statsにプレイヤーデータをJOINする
+df_stats <- df_stats %>% 
+    left_join(df_player, by='player')
+
+# データの書き出し
+df_player %>% write_csv('../data/nba/interim/player_profile.csv')
+df_stats %>% write_csv('../data/nba/interim/player_stats.csv')
+```
+
+# データの観察
+
+一旦は、直近使用する予定の成績データを確認する。
+
+```{r}
+df_stats %>% colnames
+```
+
+
+```{r}
+summary(df_stats)
+```
+
+# データの加工
+
+1992年のデータに絞る。(Michael Jordanの3ピートの時期の一年を抜いてみる。)
+year * playerでユニークな選手に絞る(移籍選手は、各チームごとに複数レコードがあるので除く)
+
+```{r}
+# 1992年のデータを絞る
+df_stats_1992 <- df_stats %>% 
+    filter(year == 1992)
+
+df_stats_1992 %>% head()
+
+# year * playerでユニークな選手に絞る(移籍選手は、各チームごとに複数レコードがあるので除く)
+df_stats_1992 <- df_stats_1992 %>% 
+    group_by(year, player, pos, age) %>% 
+    mutate(n_records = n()) %>% 
+    filter(n_records == 1) %>% 
+    select(-n_records) %>% 
+    ungroup()
+
+# データの書き出し
+df_stats_1992 %>% write_csv('../data/nba/processed/player_stats_1992.csv')
+```
